@@ -10,6 +10,27 @@ class Medicover:
     def __init__(self):
         self._session = requests.Session()
 
+    @staticmethod
+    def enable_debug():
+        import logging
+
+        # These two lines enable debugging at httplib level (requests->urllib3->http.client)
+        # You will see the REQUEST, including HEADERS and DATA, and RESPONSE with HEADERS but without DATA.
+        # The only thing missing will be the response.body which is not logged.
+        try:
+            import http.client as http_client
+        except ImportError:
+            # Python 2
+            import httplib as http_client
+        http_client.HTTPConnection.debuglevel = 1
+
+        # You must initialize logging, otherwise you'll not see debug output.
+        logging.basicConfig()
+        logging.getLogger().setLevel(logging.DEBUG)
+        requests_log = logging.getLogger("requests.packages.urllib3")
+        requests_log.setLevel(logging.DEBUG)
+        requests_log.propagate = True
+
     def login(self, username, password):
         # Step 1: Open login page.
         r = self._session.get('https://mol.medicover.pl/Users/Account/LogOn')
@@ -78,6 +99,42 @@ class Medicover:
             if len(appointments) >= json_data['totalCount']:
                 return appointments
             page += 1
+
+    # TODO(maciek): make it parameterizable.
+    def get_free_slots(self):
+        # Step 1: get the anti-CSRF token
+        r = self._session.get(
+            'https://mol.medicover.pl/MyVisits',
+            params={'specializationId': 158, 'bookingTypeId': 2, 'pfm': 1},
+        )
+        token = r.cookies['__RequestVerificationToken']
+
+        # Step 2: find the free slots
+        r = self._session.post(
+            'https://mol.medicover.pl/api/MyVisits/SearchFreeSlotsToBook',
+            params={'language': 'pl-PL'},
+            headers={
+                'Accept': 'application/json',
+                'Origin': 'https://mol.medicover.pl',
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            json= {
+                'regionId': 202,
+                'bookingTypeId': 2,
+                'specializationId': 158,
+                'clinicId': 13038,
+                'languageId': -1,
+                'doctorId': -1,
+                'searchSince': '2017-10-23T04:00:00.000Z',
+                'searchForNextSince': None,
+                'periodOfTheDay': 0,
+                'isSetBecauseOfPcc': False,
+                'isSetBecausePromoteSpecialization': False
+            },
+            cookies={'__RequestVerificationToken': token},
+        )
+        r.raise_for_status()
+        return r.json()
 
 
 if __name__ == '__main__':
