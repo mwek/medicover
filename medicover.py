@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import date
 import json
 import os
 import requests
@@ -9,6 +10,7 @@ class Medicover:
 
     def __init__(self):
         self._session = requests.Session()
+        self._csrf_token = None
 
     @staticmethod
     def enable_debug():
@@ -100,16 +102,72 @@ class Medicover:
                 return appointments
             page += 1
 
-    # TODO(maciek): make it parameterizable.
-    def get_free_slots(self):
-        # Step 1: get the anti-CSRF token
+    def _get_medicover_csrf_token(self):
+        if self._csrf_token:
+            return self._csrf_token
+
         r = self._session.get(
             'https://mol.medicover.pl/MyVisits',
-            params={'specializationId': 158, 'bookingTypeId': 2, 'pfm': 1},
+            params={'bookingTypeId': 2, 'pfm': 1},
         )
-        token = r.cookies['__RequestVerificationToken']
+        r.raise_for_status()
+        self._csrf_token = r.cookies['__RequestVerificationToken']
+        return self._csrf_token
 
-        # Step 2: find the free slots
+    @staticmethod
+    def _convert_to_params(region, specialization, clinic, doctor):
+        params = {
+            'bookingTypeId': 2,  # Konsultacja
+        }
+
+        params['regionId'] = region or -2
+        params['specializationId'] = specialization or -2
+        params['clinicId'] = clinic or -1
+        params['doctorId'] = doctor or -1
+
+        return params
+
+    def get_visit_parameters(self, region=None, specialization=None, clinic=None, doctor=None):
+        token = self._get_medicover_csrf_token()
+
+        r = self._session.get(
+            'https://mol.medicover.pl/api/MyVisits/SearchFreeSlotsToBook/FormModel',
+            params=self._convert_to_params(region, specialization, clinic, doctor),
+            headers={
+                'Accept': 'application/json',
+                'Origin': 'https://mol.medicover.pl',
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            cookies={'__RequestVerificationToken': token},
+        )
+        r.raise_for_status()
+        json_data = r.json()
+        choice_types = {
+            'region': 'availableRegions',
+            'specialization': 'availableSpecializations',
+            'clinic': 'availableClinics',
+            'doctor': 'availableDoctors',
+        }
+        choices = {
+            choice_result: {c['id']: c['text'] for c in json_data[choice_type]}
+            for choice_result, choice_type in choice_types.items()
+        }
+        return choices
+
+    def get_free_slots(self, region, specialization, clinic=None, doctor=None, search_since=None):
+        search_since = search_since or '{}T00:00:00.000Z'.format(date.today().isoformat())
+        token = self._get_medicover_csrf_token()
+
+        json_params = self._convert_to_params(region, specialization, clinic, doctor)
+        json_params.update({
+            'languageId': -1,
+            'searchSince': search_since,
+            'searchForNextSince': None,
+            'periodOfTheDay': 0,
+            'isSetBecauseOfPcc': False,
+            'isSetBecausePromoteSpecialization': False,
+        })
+
         r = self._session.post(
             'https://mol.medicover.pl/api/MyVisits/SearchFreeSlotsToBook',
             params={'language': 'pl-PL'},
@@ -118,19 +176,7 @@ class Medicover:
                 'Origin': 'https://mol.medicover.pl',
                 'X-Requested-With': 'XMLHttpRequest',
             },
-            json= {
-                'regionId': 202,
-                'bookingTypeId': 2,
-                'specializationId': 158,
-                'clinicId': 13038,
-                'languageId': -1,
-                'doctorId': -1,
-                'searchSince': '2017-10-23T04:00:00.000Z',
-                'searchForNextSince': None,
-                'periodOfTheDay': 0,
-                'isSetBecauseOfPcc': False,
-                'isSetBecausePromoteSpecialization': False
-            },
+            json=json_params,
             cookies={'__RequestVerificationToken': token},
         )
         r.raise_for_status()
