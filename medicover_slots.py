@@ -1,14 +1,23 @@
 from datetime import date, timedelta
 import os
+import requests
 import sys
 import trans
 
 from medicover import Medicover
 
 
-def notify(title, text):
-    os.system(
-        "osascript -e 'display notification \"{}\" with title \"{}\"'".format(text, title),
+def notify(free_slots):
+    if not free_slots:
+        return
+
+    ifttt_key = os.environ.get('IFTTT_KEY', '')
+    if not ifttt_key:
+        return
+
+    requests.post(
+        'https://maker.ifttt.com/trigger/medicover_slots/with/key/' + ifttt_key,
+        json={'value1': len(free_slots), 'value2': '\n'.join(free_slots)},
     )
 
 
@@ -54,12 +63,12 @@ if __name__ == '__main__':
         slots = m.get_free_slots(region, specialization, clinic, doctor)
         print(slots)
         today = date.today().isoformat()
-        day_after_tomorrow = (date.today() + timedelta(days=2)).isoformat()
-        for slot in slots['items']:
-            slot_date = slot['appointmentDate']
-            if today <= slot_date < day_after_tomorrow:
-                text = "New slot available!\nDate:{}\nDoctor:{}".format(
-                    slot_date, trans.trans(slot['doctorName'])
-                )
-                notify("Medicover", text)
+        next_four_days = (date.today() + timedelta(days=4)).isoformat()
+        free_slots = [
+            '{} ({})'.format(s['appointmentDate'], trans.trans(s['doctorName']))
+            for s in slots['items']
+            if today <= s['appointmentDate'] < next_four_days
+        ]
+        print(free_slots)
+        notify(free_slots)
 
